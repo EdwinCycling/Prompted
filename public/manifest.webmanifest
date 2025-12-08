@@ -1,6 +1,6 @@
 {
-  "name": "PromtED",
-  "short_name": "PromtED",
+  "name": "PromptEDwin",
+  "short_name": "PromptEDwin",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#09090b",

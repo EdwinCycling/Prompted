@@ -116,6 +116,7 @@ create policy "Delete prompt images" on storage.objects
 
 -- Zorg dat publiek lezen aan staat (was al zo, maar voor zekerheid)
 drop policy if exists "Public read prompt images" on storage.objects;
-create policy "Public read prompt images" on storage.objects
-  for select
+drop policy if exists "Read prompt images authenticated" on storage.objects;
+create policy "Read prompt images authenticated" on storage.objects
+  for select to authenticated
   using (bucket_id = 'prompt-images');

@@ -112,7 +112,7 @@ const App = () => {
                     <div className="w-8 h-8 bg-gradient-to-br from-primary to-purple-800 rounded-lg flex items-center justify-center">
                         <span className="font-bold text-white text-sm">PE</span>
                     </div>
-                    <span className="font-bold text-lg tracking-tight">PromtED</span>
+                    <span className="font-bold text-lg tracking-tight">PromptEDwin</span>
                     <span className="text-xs text-muted">v {APP_VERSION}</span>
                 </div>
                 

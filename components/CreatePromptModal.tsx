@@ -42,17 +42,21 @@ export const CreatePromptModal: React.FC<CreatePromptModalProps> = ({ isOpen, on
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []) as File[];
     if (files.length) {
-      setImageFiles(files);
-      const urls = files.map((f) => URL.createObjectURL(f));
-      setPreviewUrls(urls);
+      // Enforce single image
+      const file = files[0];
+      setImageFiles([file]);
+      const url = URL.createObjectURL(file);
+      setPreviewUrls([url]);
     }
   };
 
   const addImages = (files: File[]) => {
     if (!files.length) return;
-    setImageFiles((prev) => [...prev, ...files]);
-    const urls = files.map((f) => URL.createObjectURL(f));
-    setPreviewUrls((prev) => [...prev, ...urls]);
+    // Enforce single image
+    const file = files[0];
+    setImageFiles([file]);
+    const url = URL.createObjectURL(file);
+    setPreviewUrls([url]);
   };
 
   const handlePaste = (e: React.ClipboardEvent | ClipboardEvent) => {
@@ -93,22 +97,18 @@ export const CreatePromptModal: React.FC<CreatePromptModalProps> = ({ isOpen, on
     mutationFn: async () => {
       let publicImageUrl = null;
 
-      // 1. Upload Image if exists
+      // 1. Upload only the first image (enforce single image per prompt)
       let uploaded: { path: string; publicUrl: string }[] = [];
       if (imageFiles.length) {
-        for (const file of imageFiles) {
-          const compressedBlob = await compressImage(file, 512, 0.6);
-          const path = `${userId}/${Date.now()}-${file.name}`;
-          const { error: uploadError } = await supabase.storage
-            .from('prompt-images')
-            .upload(path, compressedBlob, { contentType: 'image/jpeg', upsert: false });
-          if (uploadError) throw uploadError;
-          const { data: { publicUrl } } = supabase.storage
-            .from('prompt-images')
-            .getPublicUrl(path);
-          uploaded.push({ path, publicUrl });
-        }
-        publicImageUrl = uploaded[0]?.publicUrl || null;
+        const file = imageFiles[0];
+        const compressedBlob = await compressImage(file, 512, 0.6);
+        const path = `${userId}/${Date.now()}-${file.name}`;
+        const { error: uploadError } = await supabase.storage
+          .from('prompt-images')
+          .upload(path, compressedBlob, { contentType: 'image/jpeg', upsert: false });
+        if (uploadError) throw uploadError;
+        uploaded.push({ path, publicUrl: path });
+        publicImageUrl = path;
       }
 
       // 2. Insert Record
@@ -131,8 +131,8 @@ export const CreatePromptModal: React.FC<CreatePromptModalProps> = ({ isOpen, on
       }
 
       if (inserted && uploaded.length > 0) {
-        const imgRows = uploaded.map((u) => ({ prompt_id: inserted.id, user_id: userId, path: u.path, image_url: u.publicUrl }));
-        const { error: piErr } = await supabase.from('prompt_images').insert(imgRows);
+        const u = uploaded[0];
+        const { error: piErr } = await supabase.from('prompt_images').insert({ prompt_id: inserted.id, user_id: userId, path: u.path, image_url: u.publicUrl });
         if (piErr) throw piErr;
       }
     },
@@ -236,6 +236,12 @@ export const CreatePromptModal: React.FC<CreatePromptModalProps> = ({ isOpen, on
               <Send className="w-4 h-4" />
             )}
             Save
+          </button>
+          <button
+            onClick={onClose}
+            className="ml-2 px-4 py-2 rounded-full border border-border text-sm text-muted hover:text-white hover:border-white/40 transition-colors"
+          >
+            Close
           </button>
         </div>
       </div>

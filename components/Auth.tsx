@@ -42,15 +42,16 @@ export const Auth: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-background">
-      <div className="w-full max-w-md bg-surface border border-border p-8 rounded-2xl shadow-2xl flex flex-col items-center relative overflow-hidden">
+    <div className="min-h-screen flex items-center justify-center p-4 bg-cover bg-center relative" style={{ backgroundImage: 'url(/intro.png)' }}>
+      <div className="absolute inset-0 bg-black/60" />
+      <div className="relative z-10 w-full max-w-md bg-surface/90 border border-border p-8 rounded-2xl shadow-2xl flex flex-col items-center overflow-hidden">
         
         {/* Visual Header */}
         <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-6">
           <ShieldCheck className="w-8 h-8 text-primary" />
         </div>
         
-        <h1 className="text-3xl font-bold text-white mb-2">PromtED</h1>
+        <h1 className="text-3xl font-bold text-white mb-2">PromptEDwin</h1>
         <p className="text-muted mb-8 text-center">Log in om je prompts te beheren</p>
 
         {/* Auth Form */}

@@ -6,6 +6,7 @@ import { formatDateTime } from '../utils/format';
 import { Copy, MoreVertical, Trash2, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { EditPromptModal } from './EditPromptModal';
+import { useEffect, useState } from 'react';
 
 interface PromptCardProps {
   prompt: Prompt;
@@ -14,6 +15,7 @@ interface PromptCardProps {
 }
 
 export const PromptCard: React.FC<PromptCardProps> = ({ prompt, onDelete, userId }) => {
+  const [resolvedImageUrl, setResolvedImageUrl] = useState<string | null>(null);
   const [showMenu, setShowMenu] = React.useState(false);
   const [isEditOpen, setIsEditOpen] = React.useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = React.useState(false);
@@ -28,6 +30,23 @@ export const PromptCard: React.FC<PromptCardProps> = ({ prompt, onDelete, userId
       return (data || []) as unknown as { tag_id: string; tags: { name: string } }[];
     }
   });
+
+  useEffect(() => {
+    const resolve = async () => {
+      if (!prompt.image_url) { setResolvedImageUrl(null); return; }
+      if (/^https?:\/\//.test(prompt.image_url)) { setResolvedImageUrl(prompt.image_url); return; }
+      try {
+        const { data, error } = await supabase.storage
+          .from('prompt-images')
+          .createSignedUrl(prompt.image_url, 60 * 60);
+        if (!error && data?.signedUrl) setResolvedImageUrl(data.signedUrl);
+        else setResolvedImageUrl(null);
+      } catch {
+        setResolvedImageUrl(null);
+      }
+    };
+    resolve();
+  }, [prompt.image_url]);
 
   const handleCopy = async () => {
     try {
@@ -48,7 +67,7 @@ export const PromptCard: React.FC<PromptCardProps> = ({ prompt, onDelete, userId
   };
 
   return (
-    <div className="break-inside-avoid mb-4 bg-surface rounded-xl border border-border overflow-hidden hover:border-primary/50 transition-colors group relative shadow-sm">
+    <div className="mb-4 bg-surface rounded-xl border border-border overflow-hidden hover:border-primary/50 transition-colors group relative shadow-sm">
       
       {/* Content Section */}
       <div className="p-4 relative">
@@ -56,13 +75,14 @@ export const PromptCard: React.FC<PromptCardProps> = ({ prompt, onDelete, userId
           className="w-full text-left"
           onClick={() => setIsEditOpen(true)}
         >
-          {prompt.image_url ? (
+          {resolvedImageUrl ? (
             <div className="flex items-start gap-3">
               <img
-                src={prompt.image_url}
+                src={resolvedImageUrl}
                 alt="Prompt reference"
                 className="w-24 h-24 sm:w-32 sm:h-32 object-cover rounded-md border border-border"
                 loading="lazy"
+                onError={() => setResolvedImageUrl(null)}
               />
               <p className="text-sm text-gray-300 font-normal leading-relaxed line-clamp-6">
                 {prompt.content}

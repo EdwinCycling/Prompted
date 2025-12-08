@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../services/supabaseClient';
 import { Prompt } from '../types';
 import { PromptCard } from './PromptCard';
-import { Loader2, Plus, Ghost, Tag as TagIcon, Settings } from 'lucide-react';
+import { Loader2, Plus, Ghost, Settings, XCircle } from 'lucide-react';
 import { CreatePromptModal } from './CreatePromptModal';
 import { toast } from 'sonner';
 import { useQuery as useRQ } from '@tanstack/react-query';
@@ -116,10 +116,9 @@ export const Feed: React.FC<FeedProps> = ({ userId }) => {
     <div className="pb-24 pt-4"> {/* Padding for FAB */}
       {/* Toolbar */}
       <div className="px-4 mb-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <TagIcon className="w-4 h-4 text-muted" />
-            <div className="flex flex-wrap gap-2">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2">
               {tags && tags.length > 0 ? (
                 tags.map((tag) => {
                   const active = selectedTagIds.includes(tag.id);
@@ -140,9 +139,11 @@ export const Feed: React.FC<FeedProps> = ({ userId }) => {
             {selectedTagIds.length > 0 && (
               <button 
                 onClick={() => setSelectedTagIds([])}
-                className="text-xs text-primary hover:text-primary-hover hover:underline ml-2"
+                className="p-2 text-muted hover:text-white rounded-lg hover:bg-white/10 ml-2"
+                title={`Clear ${selectedTagIds.length} tag(s)`}
+                aria-label="Clear tags"
               >
-                Clear ({selectedTagIds.length})
+                <XCircle className="w-4 h-4" />
               </button>
             )}
           </div>
@@ -170,7 +171,7 @@ export const Feed: React.FC<FeedProps> = ({ userId }) => {
         </div>
       </div>
       {sortedPrompts && sortedPrompts.length > 0 ? (
-        <div className="columns-1 sm:columns-2 lg:columns-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {sortedPrompts.map((prompt) => (
             <PromptCard 
                 key={prompt.id} 
