@@ -1,0 +1,5 @@
+{
+  "name": "MaxPrompt",
+  "description": "A secure, mobile-first prompt manager with image support and cloud sync.",
+  "requestFramePermissions": []
+}
