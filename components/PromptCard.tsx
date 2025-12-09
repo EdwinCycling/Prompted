@@ -6,6 +6,7 @@ import { formatDateTime } from '../utils/format';
 import { Copy, MoreVertical, Trash2, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { EditPromptModal } from './EditPromptModal';
+import { ImageModal } from './ImageModal';
 import { useEffect, useState } from 'react';
 
 interface PromptCardProps {
@@ -16,6 +17,7 @@ interface PromptCardProps {
 
 export const PromptCard: React.FC<PromptCardProps> = ({ prompt, onDelete, userId }) => {
   const [resolvedImageUrl, setResolvedImageUrl] = useState<string | null>(null);
+  const [showImageModal, setShowImageModal] = useState(false);
   const [showMenu, setShowMenu] = React.useState(false);
   const [isEditOpen, setIsEditOpen] = React.useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = React.useState(false);
@@ -83,6 +85,7 @@ export const PromptCard: React.FC<PromptCardProps> = ({ prompt, onDelete, userId
                 className="w-24 h-24 sm:w-32 sm:h-32 object-cover rounded-md border border-border"
                 loading="lazy"
                 onError={() => setResolvedImageUrl(null)}
+                onClick={(e) => { e.stopPropagation(); setShowImageModal(true); }}
               />
               <p className="text-sm text-gray-300 font-normal leading-relaxed line-clamp-6">
                 {prompt.content}
@@ -93,7 +96,9 @@ export const PromptCard: React.FC<PromptCardProps> = ({ prompt, onDelete, userId
               {prompt.content}
             </p>
           )}
-        </button>
+      </button>
+
+      <ImageModal open={showImageModal} onClose={() => setShowImageModal(false)} imageUrl={resolvedImageUrl} promptText={prompt.content} />
 
         {promptTags && promptTags.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">
