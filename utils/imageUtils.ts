@@ -42,3 +42,23 @@ export const compressImage = async (file: File, maxWidth = 800, quality = 0.7): 
     reader.onerror = (error) => reject(error);
   });
 };
+
+export const sanitizeFileName = (name: string): string => {
+  const base = name.replace(/\.[^/.]+$/, '');
+  const cleaned = base.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return cleaned.slice(0, 100);
+};
+
+export const validateImageFile = (
+  file: File,
+  maxBytes: number = 8 * 1024 * 1024,
+  allowedTypes: string[] = ['image/jpeg', 'image/png', 'image/webp']
+): { ok: boolean; error?: string } => {
+  if (!allowedTypes.includes(file.type)) {
+    return { ok: false, error: 'Unsupported image type' };
+  }
+  if (file.size > maxBytes) {
+    return { ok: false, error: 'Image too large' };
+  }
+  return { ok: true };
+};

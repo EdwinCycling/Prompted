@@ -6,49 +6,43 @@ import { formatDateTime } from '../utils/format';
 import { Copy, MoreVertical, Trash2, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { EditPromptModal } from './EditPromptModal';
-import { ImageModal } from './ImageModal';
+import { PromptImage } from './PromptImage';
 import { useEffect, useState } from 'react';
 
 interface PromptCardProps {
   prompt: Prompt;
   onDelete: (id: string) => void;
   userId: string;
+  tags?: string[];
+  tagsWithIds?: { tag_id: string; name: string }[];
+  onTagClick?: (tagId: string) => void;
 }
 
-export const PromptCard: React.FC<PromptCardProps> = ({ prompt, onDelete, userId }) => {
-  const [resolvedImageUrl, setResolvedImageUrl] = useState<string | null>(null);
-  const [showImageModal, setShowImageModal] = useState(false);
+export const PromptCard: React.FC<PromptCardProps> = ({ prompt, onDelete, userId, tags, tagsWithIds, onTagClick }) => {
   const [showMenu, setShowMenu] = React.useState(false);
   const [isEditOpen, setIsEditOpen] = React.useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = React.useState(false);
-  const { data: promptTags } = useQuery({
+
+  // Fallback to fetching if tags are not provided (backward compatibility or if needed)
+  const { data: fetchedTags } = useQuery({
     queryKey: ['prompt-tags', prompt.id],
     queryFn: async () => {
+      if (tags || tagsWithIds) return []; 
       const { data, error } = await supabase
         .from('prompt_tags')
-        .select('tag_id, tags:tag_id(name)')
-        .eq('prompt_id', prompt.id);
+        .select('tag_id, tags ( name )')
+        .eq('prompt_id', prompt.id)
+        .eq('user_id', userId);
       if (error) throw error;
-      return (data || []) as unknown as { tag_id: string; tags: { name: string } }[];
-    }
+      return (data || []) as unknown as { tag_id: string; tags: { name?: string }[] | { name?: string } }[];
+    },
+    enabled: !tags && !tagsWithIds
   });
 
-  useEffect(() => {
-    const resolve = async () => {
-      if (!prompt.image_url) { setResolvedImageUrl(null); return; }
-      if (/^https?:\/\//.test(prompt.image_url)) { setResolvedImageUrl(prompt.image_url); return; }
-      try {
-        const { data, error } = await supabase.storage
-          .from('prompt-images')
-          .createSignedUrl(prompt.image_url, 60 * 60);
-        if (!error && data?.signedUrl) setResolvedImageUrl(data.signedUrl);
-        else setResolvedImageUrl(null);
-      } catch {
-        setResolvedImageUrl(null);
-      }
-    };
-    resolve();
-  }, [prompt.image_url]);
+  const displayTagObjs: { tag_id: string; name: string }[] = tagsWithIds || (fetchedTags || []).map((t: any) => {
+    const name = Array.isArray(t.tags) ? (t.tags[0]?.name || '') : (t.tags as any)?.name || '';
+    return { tag_id: t.tag_id, name };
+  }).filter((x) => !!x.name);
 
   const handleCopy = async () => {
     try {
@@ -77,16 +71,17 @@ export const PromptCard: React.FC<PromptCardProps> = ({ prompt, onDelete, userId
           className="w-full text-left"
           onClick={() => setIsEditOpen(true)}
         >
-          {resolvedImageUrl ? (
+          {prompt.image_url ? (
             <div className="flex items-start gap-3">
-              <img
-                src={resolvedImageUrl}
-                alt="Prompt reference"
-                className="w-24 h-24 sm:w-32 sm:h-32 object-cover rounded-md border border-border"
-                loading="lazy"
-                onError={() => setResolvedImageUrl(null)}
-                onClick={(e) => { e.stopPropagation(); setShowImageModal(true); }}
-              />
+              <div className="w-24 h-24 sm:w-32 sm:h-32 shrink-0">
+                <PromptImage
+                  imageUrl={prompt.image_url}
+                  alt="Prompt reference"
+                  className="w-full h-full rounded-md border border-border overflow-hidden"
+                  showModal={true}
+                  promptText={prompt.content}
+                />
+              </div>
               <p className="text-sm text-gray-300 font-normal leading-relaxed line-clamp-6">
                 {prompt.content}
               </p>
@@ -98,16 +93,18 @@ export const PromptCard: React.FC<PromptCardProps> = ({ prompt, onDelete, userId
           )}
       </button>
 
-      <ImageModal open={showImageModal} onClose={() => setShowImageModal(false)} imageUrl={resolvedImageUrl} promptText={prompt.content} />
-
-        {promptTags && promptTags.length > 0 && (
+        {displayTagObjs.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">
-            {promptTags.map((t) => {
-              if (!t.tags?.name) return null;
+            {displayTagObjs.map(({ tag_id, name }) => {
               return (
-                <span key={t.tag_id} className="px-3 py-1 text-sm font-medium rounded-full border border-primary/40 bg-primary/25 text-white">
-                  {t.tags.name}
-                </span>
+                <button
+                  key={tag_id}
+                  onClick={(e) => { e.stopPropagation(); onTagClick?.(tag_id); }}
+                  className="px-3 py-1 text-sm font-medium rounded-full border border-primary/40 bg-primary/25 text-white hover:bg-primary/30"
+                  title={name}
+                >
+                  {name}
+                </button>
               );
             })}
           </div>

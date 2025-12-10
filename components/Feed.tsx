@@ -1,28 +1,55 @@
-import React from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import React, { useRef, useCallback, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { supabase } from '../services/supabaseClient';
 import { Prompt } from '../types';
 import { PromptCard } from './PromptCard';
-import { Loader2, Plus, Ghost, Settings, XCircle, Grid3x3, Image as ImageIcon, Minus, Plus as PlusIcon } from 'lucide-react';
+import { Loader2, Plus, Ghost, XCircle, Grid3x3, Image as ImageIcon, Minus, Plus as PlusIcon } from 'lucide-react';
 import { CreatePromptModal } from './CreatePromptModal';
 import { toast } from 'sonner';
 import { useQuery as useRQ } from '@tanstack/react-query';
-import { TagsManager } from './TagsManager';
 import { Tag } from '../types';
+import { PromptImage } from './PromptImage';
 
 interface FeedProps {
   userId: string;
 }
 
+const PAGE_SIZE = 24;
+
 export const Feed: React.FC<FeedProps> = ({ userId }) => {
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
-  const [isTagsOpen, setIsTagsOpen] = React.useState(false);
   const [selectedTagIds, setSelectedTagIds] = React.useState<string[]>([]);
   const [tagMode, setTagMode] = React.useState<'OR' | 'AND'>('OR');
   const [sortField, setSortField] = React.useState<'created_at' | 'updated_at'>('created_at');
   const [sortDir, setSortDir] = React.useState<'asc' | 'desc'>('desc');
-  const [viewMode, setViewMode] = React.useState<'list' | 'pictures'>('list');
-  const [density, setDensity] = React.useState<'min' | 'auto' | 'dense' | 'ultra' | 'max'>('auto');
+  
+  const [viewMode, setViewMode] = React.useState<'list' | 'pictures'>(() => {
+    try {
+      const stored = localStorage.getItem('pv-viewMode');
+      return (stored === 'list' || stored === 'pictures') ? stored : 'list';
+    } catch {
+      return 'list';
+    }
+  });
+
+  const [density, setDensity] = React.useState<'min' | 'auto' | 'dense' | 'ultra' | 'max'>(() => {
+    try {
+      const stored = localStorage.getItem('pv-density');
+      const valid = ['min', 'auto', 'dense', 'ultra', 'max'];
+      return valid.includes(stored || '') ? (stored as any) : 'auto';
+    } catch {
+      return 'auto';
+    }
+  });
+
+  React.useEffect(() => {
+    try { localStorage.setItem('pv-viewMode', viewMode); } catch {}
+  }, [viewMode]);
+
+  React.useEffect(() => {
+    try { localStorage.setItem('pv-density', density); } catch {}
+  }, [density]);
+
   const isMin = density === 'min';
   const isMax = density === 'max';
   const colsClass = React.useMemo(() => {
@@ -41,79 +68,114 @@ export const Feed: React.FC<FeedProps> = ({ userId }) => {
   }, [density]);
   const queryClient = useQueryClient();
 
-  const { data: prompts, isLoading, error } = useQuery({
-    queryKey: ['prompts'],
-    queryFn: async () => {
-      const { data, error } = await supabase
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+    error
+  } = useInfiniteQuery({
+    queryKey: ['prompts', sortField, sortDir, selectedTagIds, tagMode, userId],
+    queryFn: async ({ pageParam = 0 }) => {
+      let query = supabase
         .from('prompts')
-        .select('*')
-        .order('created_at', { ascending: false });
+        .select('id,user_id,content,image_url,created_at,updated_at, prompt_tags!left(tag_id, tags(name))')
+        .eq('user_id', userId);
+
+      // Filtering logic
+      if (selectedTagIds.length > 0) {
+        // Since we can't easily do complex filtering on M2M with embedded join in one go for AND/OR,
+        // we might need a different approach if we want server-side filtering.
+        // For OR, we can find prompt IDs first.
+        // For now, let's try a simpler approach:
+        // If we filter, we might just load matching IDs and then fetch details?
+        // Or we use the inner join trick for OR.
+        
+        // This handles "OR" somewhat if we use !inner, but then we lose prompts that don't match.
+        // And we get duplicate rows if multiple tags match.
+        
+        // For simplicity and performance, we'll fetch matching IDs first if there are tags.
+        // This is 2 round trips but much lighter than fetching all data.
+        
+        // Step 1: Get matching Prompt IDs
+        let tagQuery = supabase.from('prompt_tags').select('prompt_id').eq('user_id', userId);
+        if (tagMode === 'AND') {
+             // Hard to do AND in one query without RPC.
+             // We can do it in memory if the dataset isn't huge, but "database traffic" is the concern.
+             // Let's stick to "OR" logic for the query, and maybe refine later?
+             // Actually, if we filter by tags, we probably want to see only those prompts.
+             tagQuery = tagQuery.in('tag_id', selectedTagIds);
+        } else {
+             tagQuery = tagQuery.in('tag_id', selectedTagIds);
+        }
+        
+        const { data: tagData, error: tagError } = await tagQuery;
+        if (tagError) throw tagError;
+        
+        let matchingIds = (tagData || []).map(x => x.prompt_id);
+        
+        // If AND mode, we need to filter locally on the IDs
+        if (tagMode === 'AND') {
+             // Group by prompt_id and count matches
+             const counts: Record<string, number> = {};
+             tagData?.forEach(x => { counts[x.prompt_id] = (counts[x.prompt_id] || 0) + 1; });
+             matchingIds = Object.keys(counts).filter(id => counts[id] >= selectedTagIds.length);
+        }
+        
+        // Use unique IDs
+        matchingIds = [...new Set(matchingIds)];
+        
+        if (matchingIds.length === 0) return []; // No matches
+        
+        query = query.in('id', matchingIds);
+      }
+
+      const from = pageParam * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+
+      const { data, error } = await query
+        .order(sortField, { ascending: sortDir === 'asc' })
+        .range(from, to);
       
       if (error) throw error;
-      return data as Prompt[];
+      return data as (Prompt & { prompt_tags: { tag_id: string, tags: { name: string } }[] })[];
+    },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      return lastPage.length === PAGE_SIZE ? allPages.length : undefined;
     },
   });
 
+  // Load more on scroll
+  const observerRef = useRef<IntersectionObserver>();
+  const loadMoreRef = useCallback((node: HTMLDivElement) => {
+    if (isLoading || isFetchingNextPage) return;
+    if (observerRef.current) observerRef.current.disconnect();
+    observerRef.current = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && hasNextPage) {
+        fetchNextPage();
+      }
+    });
+    if (node) observerRef.current.observe(node);
+  }, [isLoading, isFetchingNextPage, hasNextPage, fetchNextPage]);
+
   const { data: tags } = useRQ({
-    queryKey: ['tags'],
+    queryKey: ['tags', userId],
     queryFn: async () => {
-      const { data, error } = await supabase.from('tags').select('*').order('name');
+      const { data, error } = await supabase.from('tags').select('id,name').eq('user_id', userId).order('name');
       if (error) throw error;
       return data as Tag[];
     }
   });
 
-  const { data: promptTags } = useRQ({
-    queryKey: ['prompt-tags'],
-    queryFn: async () => {
-      const { data, error } = await supabase.from('prompt_tags').select('*');
-      if (error) throw error;
-      return data as { prompt_id: string; tag_id: string; user_id: string }[];
-    }
-  });
-
-  const tagNameMap = React.useMemo(() => {
-    const byId = new Map<string, string>();
-    (tags || []).forEach((t) => byId.set(t.id, t.name));
-    const map: Record<string, string[]> = {};
-    (promptTags || []).forEach((pt) => {
-      const name = byId.get(pt.tag_id);
-      if (!name) return;
-      (map[pt.prompt_id] ||= []).push(name);
-    });
-    return map;
-  }, [tags, promptTags]);
-
-  const filteredPrompts = React.useMemo(() => {
-    if (!prompts) return [] as Prompt[];
-    if (!selectedTagIds.length) return prompts;
-    const map = new Map<string, string[]>();
-    (promptTags || []).forEach((pt) => {
-      const arr = map.get(pt.prompt_id) || [];
-      arr.push(pt.tag_id);
-      map.set(pt.prompt_id, arr);
-    });
-    return prompts.filter((p) => {
-      const tagsOfPrompt = map.get(p.id) || [];
-      return tagMode === 'OR'
-        ? selectedTagIds.some((id) => tagsOfPrompt.includes(id))
-        : selectedTagIds.every((id) => tagsOfPrompt.includes(id));
-    });
-  }, [prompts, promptTags, selectedTagIds, tagMode]);
-
-  const sortedPrompts = React.useMemo(() => {
-    const arr = [...filteredPrompts];
-    arr.sort((a, b) => {
-      const av = new Date(a[sortField]).getTime();
-      const bv = new Date(b[sortField]).getTime();
-      return sortDir === 'asc' ? av - bv : bv - av;
-    });
-    return arr;
-  }, [filteredPrompts, sortField, sortDir]);
+  const allPrompts = React.useMemo(() => {
+    return data?.pages.flatMap(page => page) || [];
+  }, [data]);
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-        const { error } = await supabase.from('prompts').delete().eq('id', id);
+        const { error } = await supabase.from('prompts').delete().eq('id', id).eq('user_id', userId);
         if (error) throw error;
     },
     onSuccess: () => {
@@ -124,6 +186,7 @@ export const Feed: React.FC<FeedProps> = ({ userId }) => {
         toast.error('Failed to delete prompt');
     }
   });
+  const [lastDeleteAt, setLastDeleteAt] = React.useState(0);
 
   if (isLoading) {
     return (
@@ -177,12 +240,8 @@ export const Feed: React.FC<FeedProps> = ({ userId }) => {
               </button>
             )}
           </div>
-          <button onClick={() => setIsTagsOpen(true)} className="p-2 text-muted hover:text-white rounded-lg hover:bg-white/10 flex items-center gap-2">
-            <Settings className="w-4 h-4" />
-            Manage Tags
-          </button>
         </div>
-        <div className="mt-3 flex items-center gap-6">
+        <div className="mt-3 flex flex-wrap items-center gap-4 sm:gap-6">
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted">Filter Mode</span>
             <div className="flex items-center gap-1">
@@ -218,31 +277,34 @@ export const Feed: React.FC<FeedProps> = ({ userId }) => {
         </div>
       </div>
       {viewMode === 'list' ? (
-        sortedPrompts && sortedPrompts.length > 0 ? (
+        allPrompts && allPrompts.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {sortedPrompts.map((prompt) => (
+            {allPrompts.map((prompt) => (
               <PromptCard 
                   key={prompt.id} 
                   prompt={prompt} 
                   userId={userId}
-                  onDelete={(id) => deleteMutation.mutate(id)}
+                  onDelete={(id) => { const now = Date.now(); if (now - lastDeleteAt < 1500) { toast.error('Please wait…'); return; } setLastDeleteAt(now); deleteMutation.mutate(id); }}
+                  tagsWithIds={(prompt.prompt_tags || []).map((pt) => ({ tag_id: pt.tag_id, name: pt.tags?.name || '' }))}
+                  onTagClick={(tagId) => { setSelectedTagIds([tagId]); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
               />
             ))}
+            <div ref={loadMoreRef} className="h-4 w-full" />
+            {isFetchingNextPage && <div className="col-span-full flex justify-center py-4"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div>}
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center py-20 text-muted">
               <Ghost className="w-12 h-12 mb-4 opacity-20" />
-              <p className="text-lg">No prompts yet.</p>
-              <p className="text-sm">Create your first one below!</p>
+              <p className="text-lg">No prompts found.</p>
           </div>
         )
       ) : (
-        sortedPrompts && sortedPrompts.length > 0 ? (
-          <PicturesGrid prompts={sortedPrompts} colsClass={colsClass} density={density} tagNameMap={tagNameMap} />
+        allPrompts && allPrompts.length > 0 ? (
+          <PicturesGrid prompts={allPrompts} colsClass={colsClass} density={density} loadMoreRef={loadMoreRef} isFetching={isFetchingNextPage} />
         ) : (
           <div className="flex flex-col items-center justify-center py-20 text-muted">
               <Ghost className="w-12 h-12 mb-4 opacity-20" />
-              <p className="text-lg">No images yet.</p>
+              <p className="text-lg">No images found.</p>
           </div>
         )
       )}
@@ -261,68 +323,17 @@ export const Feed: React.FC<FeedProps> = ({ userId }) => {
         onClose={() => setIsCreateOpen(false)} 
         userId={userId}
       />
-
-      <TagsManager
-        isOpen={isTagsOpen}
-        onClose={() => setIsTagsOpen(false)}
-        userId={userId}
-      />
     </div>
   );
 };
 
-const PicturesGrid: React.FC<{ prompts: Prompt[]; colsClass: string; density: 'min' | 'auto' | 'dense' | 'ultra' | 'max'; tagNameMap: Record<string, string[]> }> = ({ prompts, colsClass, density, tagNameMap }) => {
-  const [signed, setSigned] = React.useState<Record<string, string>>({});
-  const [rows, setRows] = React.useState(3);
-  const sentinelRef = React.useRef<HTMLDivElement | null>(null);
-
-  const getColsNumber = React.useCallback(() => {
-    const w = window.innerWidth;
-    if (density === 'min') return 1;
-    if (density === 'max') {
-      if (w >= 640) return 5;
-      return 4;
-    }
-    if (w >= 1280) return density === 'auto' ? 4 : 5;
-    if (w >= 1024) return density === 'auto' ? 3 : 5;
-    if (w >= 640) {
-      if (density === 'auto') return 2;
-      if (density === 'dense') return 3;
-      return 4;
-    }
-    if (density === 'auto') return 1;
-    if (density === 'dense') return 2;
-    return 3;
-  }, [density]);
-  React.useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      const map: Record<string, string> = {};
-      for (const p of prompts) {
-        if (!p.image_url) continue;
-        const val = p.image_url;
-        if (/^https?:\/\//.test(val)) { map[p.id] = val; continue; }
-        const { data } = await supabase.storage.from('prompt-images').createSignedUrl(val, 60 * 60);
-        if (data?.signedUrl) map[p.id] = data.signedUrl;
-      }
-      if (!cancelled) setSigned(map);
-    };
-    run();
-    return () => { cancelled = true; };
-  }, [prompts]);
-
-  React.useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
-    const obs = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        if (e.isIntersecting) setRows((r) => r + 3);
-      }
-    });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
-
+const PicturesGrid: React.FC<{ 
+  prompts: (Prompt & { prompt_tags: { tags: { name: string } }[] })[]; 
+  colsClass: string; 
+  density: 'min' | 'auto' | 'dense' | 'ultra' | 'max'; 
+  loadMoreRef: (node: HTMLDivElement) => void;
+  isFetching: boolean;
+}> = ({ prompts, colsClass, density, loadMoreRef, isFetching }) => {
   const copyPrompt = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -331,42 +342,43 @@ const PicturesGrid: React.FC<{ prompts: Prompt[]; colsClass: string; density: 'm
     } catch {}
   };
 
-  const cols = getColsNumber();
-  const visible = prompts.slice(0, Math.max(cols, cols * rows));
-
   const imgClass = density === 'min'
-    ? 'w-full h-[60vh] sm:h-[65vh] lg:h-[70vh] object-cover'
-    : 'w-full h-40 sm:h-48 lg:h-56 object-cover';
+    ? 'w-full h-[60vh] sm:h-[65vh] lg:h-[70vh]'
+    : 'w-full h-40 sm:h-48 lg:h-56';
 
   return (
     <div className={`grid ${colsClass} gap-2`}>
-      {visible.map((p) => (
+      {prompts.map((p) => (
         <button key={p.id} onClick={() => copyPrompt(p.content)} className="group relative bg-surface border border-border rounded-lg overflow-hidden text-left">
           {p.image_url ? (
-            signed[p.id] ? (
-              <img src={signed[p.id]} alt="" className={imgClass} loading="lazy" />
-            ) : (
-              <div className={imgClass.replace('object-cover', '') + ' animate-pulse bg-zinc-800'} />
-            )
+            <div className={imgClass}>
+              <PromptImage
+                imageUrl={p.image_url}
+                alt=""
+                className="w-full h-full"
+                promptText={p.content}
+              />
+            </div>
           ) : (
-            <div className={imgClass.replace('object-cover', '') + ' p-3 flex items-start justify-start'}>
+            <div className={imgClass + ' p-3 flex items-start justify-start'}>
               <p className="text-sm text-gray-300 leading-relaxed line-clamp-6">
                 {p.content}
               </p>
             </div>
           )}
-          {tagNameMap[p.id] && tagNameMap[p.id].length > 0 && (
+          {p.prompt_tags && p.prompt_tags.length > 0 && (
             <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/60 to-transparent flex flex-wrap gap-1">
-              {tagNameMap[p.id].slice(0, 3).map((name) => (
-                <span key={name} className="px-2 py-0.5 text-xs rounded-full border border-primary/40 bg-primary/25 text-white">
-                  {name}
+              {p.prompt_tags.slice(0, 3).map((pt) => (
+                <span key={pt.tags?.name} className="px-2 py-0.5 text-xs rounded-full border border-primary/40 bg-primary/25 text-white">
+                  {pt.tags?.name}
                 </span>
               ))}
             </div>
           )}
         </button>
       ))}
-      <div ref={sentinelRef} />
+      <div ref={loadMoreRef} className="col-span-full h-4" />
+      {isFetching && <div className="col-span-full flex justify-center py-4"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div>}
     </div>
   );
 };

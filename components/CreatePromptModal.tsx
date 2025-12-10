@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { X, Image as ImageIcon, Loader2, Send, Upload } from 'lucide-react';
-import { compressImage } from '../utils/imageUtils';
+import { compressImage, sanitizeFileName, validateImageFile } from '../utils/imageUtils';
+import { toast } from 'sonner';
 import { supabase } from '../services/supabaseClient';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useQuery } from '@tanstack/react-query';
@@ -24,7 +25,7 @@ export const CreatePromptModal: React.FC<CreatePromptModalProps> = ({ isOpen, on
   const { data: tags } = useQuery({
     queryKey: ['tags'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('tags').select('*').order('name');
+      const { data, error } = await supabase.from('tags').select('id,name').eq('user_id', userId).order('name');
       if (error) throw error;
       return data as Tag[];
     }
@@ -44,6 +45,8 @@ export const CreatePromptModal: React.FC<CreatePromptModalProps> = ({ isOpen, on
     if (files.length) {
       // Enforce single image
       const file = files[0];
+      const check = validateImageFile(file);
+      if (!check.ok) { toast.error(check.error || 'Invalid image'); return; }
       setImageFiles([file]);
       const url = URL.createObjectURL(file);
       setPreviewUrls([url]);
@@ -54,6 +57,8 @@ export const CreatePromptModal: React.FC<CreatePromptModalProps> = ({ isOpen, on
     if (!files.length) return;
     // Enforce single image
     const file = files[0];
+    const check = validateImageFile(file);
+    if (!check.ok) { toast.error(check.error || 'Invalid image'); return; }
     setImageFiles([file]);
     const url = URL.createObjectURL(file);
     setPreviewUrls([url]);
@@ -65,6 +70,8 @@ export const CreatePromptModal: React.FC<CreatePromptModalProps> = ({ isOpen, on
     let file: File | null = null;
     const firstFromFiles = (Array.from(cd.files || []) as File[]).find((f) => f.type?.startsWith('image'));
     if (firstFromFiles) {
+      const check = validateImageFile(firstFromFiles);
+      if (!check.ok) { toast.error(check.error || 'Invalid image'); return; }
       file = firstFromFiles;
     } else {
       const item = Array.from(cd.items || []).find((it) => it.type?.startsWith('image'));
@@ -73,6 +80,8 @@ export const CreatePromptModal: React.FC<CreatePromptModalProps> = ({ isOpen, on
         if (f) {
           const name = `pasted-${Date.now()}.${(f.type.split('/')[1] || 'png')}`;
           file = new File([f], name, { type: f.type });
+          const check = validateImageFile(file);
+          if (!check.ok) { toast.error(check.error || 'Invalid image'); return; }
         }
       }
     }
@@ -101,8 +110,11 @@ export const CreatePromptModal: React.FC<CreatePromptModalProps> = ({ isOpen, on
       let uploaded: { path: string; publicUrl: string }[] = [];
       if (imageFiles.length) {
         const file = imageFiles[0];
+        const preCheck = validateImageFile(file);
+        if (!preCheck.ok) { throw new Error(preCheck.error || 'Invalid image'); }
         const compressedBlob = await compressImage(file, 512, 0.6);
-        const path = `${userId}/${Date.now()}-${file.name}`;
+        const safe = sanitizeFileName(file.name);
+        const path = `${userId}/${Date.now()}-${safe}.jpg`;
         const { error: uploadError } = await supabase.storage
           .from('prompt-images')
           .upload(path, compressedBlob, { contentType: 'image/jpeg', upsert: false });
@@ -145,6 +157,8 @@ export const CreatePromptModal: React.FC<CreatePromptModalProps> = ({ isOpen, on
       console.error(error);
     }
   });
+
+  const [lastSaveAt, setLastSaveAt] = useState(0);
 
   if (!isOpen) return null;
 
@@ -226,7 +240,7 @@ export const CreatePromptModal: React.FC<CreatePromptModalProps> = ({ isOpen, on
           <span className="text-xs text-muted ml-2">Plak of sleep afbeelding</span>
 
           <button
-            onClick={() => uploadPromptMutation.mutate()}
+            onClick={() => { const now = Date.now(); if (now - lastSaveAt < 2000) { toast.error('Please wait…'); return; } setLastSaveAt(now); uploadPromptMutation.mutate(); }}
             disabled={!content.trim() || uploadPromptMutation.isPending}
             className="bg-primary hover:bg-primary-hover text-white px-6 py-2 rounded-full font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
           >

@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { X, Image as ImageIcon, Loader2, Save, Copy } from 'lucide-react';
-import { compressImage } from '../utils/imageUtils';
+import { compressImage, sanitizeFileName, validateImageFile } from '../utils/imageUtils';
 import { supabase } from '../services/supabaseClient';
 import { toast } from 'sonner';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -26,7 +26,7 @@ export const EditPromptModal: React.FC<EditPromptModalProps> = ({ isOpen, onClos
   const { data: tags } = useQuery({
     queryKey: ['tags'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('tags').select('*').order('name');
+      const { data, error } = await supabase.from('tags').select('id,name').eq('user_id', userId).order('name');
       if (error) throw error;
       return data as Tag[];
     }
@@ -35,24 +35,27 @@ export const EditPromptModal: React.FC<EditPromptModalProps> = ({ isOpen, onClos
   const { data: existing } = useQuery({
     queryKey: ['prompt-tags', promptId],
     queryFn: async () => {
-      const { data, error } = await supabase.from('prompt_tags').select('tag_id').eq('prompt_id', promptId);
+      const { data, error } = await supabase.from('prompt_tags').select('tag_id').eq('prompt_id', promptId).eq('user_id', userId);
       if (error) throw error;
       return (data || []) as { tag_id: string }[];
     },
     enabled: isOpen
   });
 
+  const [tagsTouched, setTagsTouched] = useState(false);
+
   React.useEffect(() => {
-    if (existing) setSelectedTagIds(existing.map((x) => x.tag_id));
-  }, [existing]);
+    if (existing && !tagsTouched) setSelectedTagIds(existing.map((x) => x.tag_id));
+  }, [existing, tagsTouched]);
 
   const { data: images, refetch: refetchImages } = useQuery({
     queryKey: ['prompt-images', promptId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('prompt_images')
-        .select('*')
-        .eq('prompt_id', promptId);
+        .select('id,path,image_url')
+        .eq('prompt_id', promptId)
+        .eq('user_id', userId);
       if (error) throw error;
       return (data || []) as PromptImage[];
     },
@@ -103,12 +106,15 @@ export const EditPromptModal: React.FC<EditPromptModalProps> = ({ isOpen, onClos
   const handleAddFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []) as File[];
     if (!files.length) return;
-    setAddFiles(files);
+    const first = files[0];
+    const check = validateImageFile(first);
+    if (!check.ok) { toast.error(check.error || 'Invalid image'); return; }
+    setAddFiles([first]);
     try {
-      const url = URL.createObjectURL(files[0]);
+      const url = URL.createObjectURL(first);
       setPreviewUrl(url);
     } catch {}
-    addImagesMutation.mutate(files);
+    addImagesMutation.mutate([first]);
     e.currentTarget.value = '';
   };
 
@@ -118,6 +124,8 @@ export const EditPromptModal: React.FC<EditPromptModalProps> = ({ isOpen, onClos
     let file: File | null = null;
     const firstFromFiles = (Array.from(cd.files || []) as File[]).find((f) => f.type?.startsWith('image'));
     if (firstFromFiles) {
+      const check = validateImageFile(firstFromFiles);
+      if (!check.ok) { if ('preventDefault' in e && typeof e.preventDefault === 'function') e.preventDefault(); toast.error(check.error || 'Invalid image'); return; }
       file = firstFromFiles;
     } else {
       const item = Array.from(cd.items || []).find((it) => it.type?.startsWith('image'));
@@ -126,6 +134,8 @@ export const EditPromptModal: React.FC<EditPromptModalProps> = ({ isOpen, onClos
         if (f) {
           const name = `pasted-${Date.now()}.${(f.type.split('/')[1] || 'png')}`;
           file = new File([f], name, { type: f.type });
+          const check = validateImageFile(file);
+          if (!check.ok) { if ('preventDefault' in e && typeof e.preventDefault === 'function') e.preventDefault(); toast.error(check.error || 'Invalid image'); return; }
         }
       }
     }
@@ -147,15 +157,19 @@ export const EditPromptModal: React.FC<EditPromptModalProps> = ({ isOpen, onClos
       const { data: existingRows } = await supabase
         .from('prompt_images')
         .select('id,path')
-        .eq('prompt_id', promptId);
-      const existingPaths = (existingRows || []).map((r: any) => r.path);
+        .eq('prompt_id', promptId)
+        .eq('user_id', userId);
+      const existingPaths = (existingRows || []).map((r: any) => r.path).filter((p: string) => p.startsWith(`${userId}/`));
       if (existingPaths.length) {
         await supabase.storage.from('prompt-images').remove(existingPaths);
-        await supabase.from('prompt_images').delete().eq('prompt_id', promptId);
+        await supabase.from('prompt_images').delete().eq('prompt_id', promptId).eq('user_id', userId);
       }
 
+      const preCheck = validateImageFile(file);
+      if (!preCheck.ok) { throw new Error(preCheck.error || 'Invalid image'); }
       const compressed = await compressImage(file, 512, 0.6);
-      const path = `${userId}/${Date.now()}-${file.name}`;
+      const safe = sanitizeFileName(file.name);
+      const path = `${userId}/${Date.now()}-${safe}.jpg`;
       const { error: upErr } = await supabase.storage
         .from('prompt-images')
         .upload(path, compressed, { contentType: 'image/jpeg', upsert: false });
@@ -165,7 +179,7 @@ export const EditPromptModal: React.FC<EditPromptModalProps> = ({ isOpen, onClos
       const { error: insErr } = await supabase.from('prompt_images').insert(row);
       if (insErr) throw insErr;
       // Set prompt main image
-      await supabase.from('prompts').update({ image_url: path }).eq('id', promptId);
+      await supabase.from('prompts').update({ image_url: path }).eq('id', promptId).eq('user_id', userId);
       return [row];
     },
     onSuccess: async (rows) => {
@@ -176,7 +190,7 @@ export const EditPromptModal: React.FC<EditPromptModalProps> = ({ isOpen, onClos
         if (!previewUrl && !initialImageUrl) {
           const firstPath = rows[0].path;
           try {
-            await supabase.from('prompts').update({ image_url: firstPath }).eq('id', promptId);
+            await supabase.from('prompts').update({ image_url: firstPath }).eq('id', promptId).eq('user_id', userId);
             setPreviewUrl(null);
             queryClient.invalidateQueries({ queryKey: ['prompts'] });
           } catch {}
@@ -190,9 +204,9 @@ export const EditPromptModal: React.FC<EditPromptModalProps> = ({ isOpen, onClos
     try {
       const { error: rmErr } = await supabase.storage.from('prompt-images').remove([img.path]);
       if (rmErr) throw rmErr;
-      const { error } = await supabase.from('prompt_images').delete().eq('id', img.id);
+      const { error } = await supabase.from('prompt_images').delete().eq('id', img.id).eq('user_id', userId);
       if (error) throw error;
-      await supabase.from('prompts').update({ image_url: null }).eq('id', promptId);
+      await supabase.from('prompts').update({ image_url: null }).eq('id', promptId).eq('user_id', userId);
       refetchImages();
       queryClient.invalidateQueries({ queryKey: ['prompt-images', promptId] });
       queryClient.invalidateQueries({ queryKey: ['prompts'] });
@@ -212,29 +226,36 @@ export const EditPromptModal: React.FC<EditPromptModalProps> = ({ isOpen, onClos
       const { error: updateError } = await supabase
         .from('prompts')
         .update({ content, image_url: publicImageUrl })
-        .eq('id', promptId);
+        .eq('id', promptId)
+        .eq('user_id', userId);
       if (updateError) throw updateError;
 
-      const { error: delErr } = await supabase
-        .from('prompt_tags')
-        .delete()
-        .eq('prompt_id', promptId);
-      if (delErr) throw delErr;
+      if (promptId && existing) {
+        const idsToApply = selectedTagIds;
+        const { error: delErr } = await supabase
+          .from('prompt_tags')
+          .delete()
+          .eq('prompt_id', promptId)
+          .eq('user_id', userId);
+        if (delErr) throw delErr;
 
-      if (selectedTagIds.length > 0) {
-        const rows = selectedTagIds.map((tag_id) => ({ prompt_id: promptId, tag_id, user_id: userId }));
-        const { error: insErr } = await supabase.from('prompt_tags').insert(rows);
-        if (insErr) throw insErr;
+        if (idsToApply.length > 0) {
+          const rows = idsToApply.map((tag_id) => ({ prompt_id: promptId, tag_id, user_id: userId }));
+          const { error: insErr } = await supabase.from('prompt_tags').insert(rows);
+          if (insErr) throw insErr;
+        }
       }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['prompts'] });
-      queryClient.invalidateQueries({ queryKey: ['prompt-tags'] });
+      queryClient.invalidateQueries({ queryKey: ['prompt-tags'], exact: true });
       queryClient.invalidateQueries({ queryKey: ['prompt-tags', promptId] });
+      queryClient.invalidateQueries({ queryKey: ['tags'] });
       onClose();
     },
     onError: (e: any) => console.error(e)
   });
+  const [lastSaveAt, setLastSaveAt] = useState(0);
 
   const handleCopy = async () => {
     try {
@@ -249,9 +270,9 @@ export const EditPromptModal: React.FC<EditPromptModalProps> = ({ isOpen, onClos
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4">
+    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-4 pt-12 sm:p-4">
       <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-3xl bg-surface sm:rounded-2xl rounded-t-2xl border border-border shadow-2xl flex flex-col max-h-[92vh]">
+      <div className="relative w-full max-w-3xl bg-surface rounded-2xl border border-border shadow-2xl flex flex-col max-h-[85vh] sm:max-h-[90vh]">
         <div className="flex items-center justify-between p-4 border-b border-border">
           <h2 className="text-lg font-semibold text-white">Edit Prompt</h2>
           <button onClick={onClose} className="p-2 text-muted hover:text-white rounded-full hover:bg-white/10">
@@ -307,7 +328,10 @@ export const EditPromptModal: React.FC<EditPromptModalProps> = ({ isOpen, onClos
                   return (
                     <button
                       key={tag.id}
-                      onClick={() => setSelectedTagIds((prev) => prev.includes(tag.id) ? prev.filter(id => id !== tag.id) : [...prev, tag.id])}
+                      onClick={() => {
+                        setTagsTouched(true);
+                        setSelectedTagIds((prev) => prev.includes(tag.id) ? prev.filter(id => id !== tag.id) : [...prev, tag.id]);
+                      }}
                       className={`px-3 py-1 rounded-full border ${active ? 'border-primary text-white bg-primary/20' : 'border-border text-muted hover:text-white hover:border-white/40'}`}
                     >
                       {tag.name}
@@ -334,7 +358,7 @@ export const EditPromptModal: React.FC<EditPromptModalProps> = ({ isOpen, onClos
               <Copy className="w-4 h-4" />
               Copy
             </button>
-            <button onClick={() => updateMutation.mutate()} disabled={!content.trim() || updateMutation.isPending} className="bg-primary hover:bg-primary-hover text-white px-6 py-2 rounded-full font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95">
+            <button onClick={() => { const now = Date.now(); if (now - lastSaveAt < 2000) { toast.error('Please wait…'); return; } setLastSaveAt(now); updateMutation.mutate(); }} disabled={!content.trim() || updateMutation.isPending} className="bg-primary hover:bg-primary-hover text-white px-6 py-2 rounded-full font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95">
               {updateMutation.isPending ? (<Loader2 className="w-4 h-4 animate-spin" />) : (<Save className="w-4 h-4" />)}
               Save Changes
             </button>
