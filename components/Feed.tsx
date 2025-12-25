@@ -139,7 +139,13 @@ export const Feed: React.FC<FeedProps> = ({ userId }) => {
         .range(from, to);
       
       if (error) throw error;
-      return data as (Prompt & { prompt_tags: { tag_id: string, tags: { name: string } }[] })[];
+      return (data || []).map(p => ({
+        ...p,
+        prompt_tags: p.prompt_tags?.map((pt: any) => ({
+          tag_id: pt.tag_id,
+          tags: { name: pt.tags?.name || '' }
+        })) || []
+      })) as (Prompt & { prompt_tags: { tag_id: string, tags: { name: string } }[] })[];
     },
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => {

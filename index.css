@@ -1,14 +1,7 @@
-@import "tailwindcss";
-
-@theme {
-  --color-background: #09090b;
-  --color-surface: #18181b;
-  --color-primary: #8b5cf6;
-  --color-primary-hover: #7c3aed;
-  --color-text: #f4f4f5;
-  --color-muted: #a1a1aa;
-  --color-border: #27272a;
-}
+/* @theme */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 @layer utilities {
   /* Hide scrollbar for cleaner UI in modals */

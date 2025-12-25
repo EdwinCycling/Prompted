@@ -38,5 +38,12 @@ if (supabaseUrl === 'https://placeholder.supabase.co') {
   console.warn("Supabase URL is missing! Authentication and database features will not work properly.");
 }
 
-export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    storage: window.localStorage
+  }
+});
 export const SUPABASE_CONFIGURED = supabaseUrl !== 'https://placeholder.supabase.co' && supabaseAnonKey !== 'placeholder-key';
