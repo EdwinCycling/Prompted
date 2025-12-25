@@ -139,13 +139,22 @@ export const Feed: React.FC<FeedProps> = ({ userId }) => {
         .range(from, to);
       
       if (error) throw error;
-      return (data || []).map(p => ({
-        ...p,
-        prompt_tags: p.prompt_tags?.map((pt: any) => ({
-          tag_id: pt.tag_id,
-          tags: { name: pt.tags?.name || '' }
-        })) || []
-      })) as (Prompt & { prompt_tags: { tag_id: string, tags: { name: string } }[] })[];
+
+      const rows = (data || []) as unknown as (Prompt & {
+        prompt_tags?: { tag_id: string; tags: { name?: string }[] | { name?: string } | null }[] | null;
+      })[];
+
+      return rows.map((p) => {
+        const normalizedTags = (p.prompt_tags || [])
+          .map((pt) => {
+            const name = Array.isArray(pt.tags) ? pt.tags[0]?.name : pt.tags?.name;
+            if (!name) return null;
+            return { tag_id: pt.tag_id, tags: { name } };
+          })
+          .filter((x): x is { tag_id: string; tags: { name: string } } => x !== null);
+
+        return { ...p, prompt_tags: normalizedTags };
+      });
     },
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => {
@@ -291,7 +300,7 @@ export const Feed: React.FC<FeedProps> = ({ userId }) => {
                   prompt={prompt} 
                   userId={userId}
                   onDelete={(id) => { const now = Date.now(); if (now - lastDeleteAt < 1500) { toast.error('Please wait…'); return; } setLastDeleteAt(now); deleteMutation.mutate(id); }}
-                  tagsWithIds={(prompt.prompt_tags || []).map((pt) => ({ tag_id: pt.tag_id, name: pt.tags?.name || '' }))}
+                  tagsWithIds={(prompt.prompt_tags || []).map((pt) => ({ tag_id: pt.tag_id, name: pt.tags.name }))}
                   onTagClick={(tagId) => { setSelectedTagIds([tagId]); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
               />
             ))}
@@ -334,7 +343,7 @@ export const Feed: React.FC<FeedProps> = ({ userId }) => {
 };
 
 const PicturesGrid: React.FC<{ 
-  prompts: (Prompt & { prompt_tags: { tags: { name: string } }[] })[]; 
+  prompts: (Prompt & { prompt_tags: { tag_id: string; tags: { name: string } }[] })[]; 
   colsClass: string; 
   density: 'min' | 'auto' | 'dense' | 'ultra' | 'max'; 
   loadMoreRef: (node: HTMLDivElement) => void;
@@ -375,8 +384,8 @@ const PicturesGrid: React.FC<{
           {p.prompt_tags && p.prompt_tags.length > 0 && (
             <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/60 to-transparent flex flex-wrap gap-1">
               {p.prompt_tags.slice(0, 3).map((pt) => (
-                <span key={pt.tags?.name} className="px-2 py-0.5 text-xs rounded-full border border-primary/40 bg-primary/25 text-white">
-                  {pt.tags?.name}
+                <span key={pt.tag_id} className="px-2 py-0.5 text-xs rounded-full border border-primary/40 bg-primary/25 text-white">
+                  {pt.tags.name}
                 </span>
               ))}
             </div>
